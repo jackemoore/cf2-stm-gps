@@ -21,7 +21,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
- * uart.h - uart CRTP link and raw access functions
+ * uart_extgps.h - uart driver for deck port
  */
 #ifndef UART_EXTGPS_H_
 #define UART_EXTGPS_H_
@@ -32,98 +32,56 @@
 #include "eprintf.h"
 
 #define EXT_UART1               //TX1/RX1 Serial Port on LEFT Side Pins
-//#define NRF_UART
 
-#ifdef NRF_UART
+#if defined (EXT_UART1)         //UART4 does not have flow control
 // APB1 - uart4-5 & usart2-3
 // APB2 - usart1,6
-  #define UART_TYPE             USART6
-  #define UART_PERIF            RCC_APB2Periph_USART6
-  #define ENABLE_UART_RCC       RCC_APB2PeriphClockCmd
-  #define UART_IRQ              USART6_IRQn
+  #define UARTn_TYPE             UART4
+  #define UARTn_PERIF            RCC_APB1Periph_UART4
+  #define ENABLE_UARTn_RCC       RCC_APB1PeriphClockCmd
+  #define UARTn_IRQ              UART4_IRQn
 
-  #define UART_DMA_IRQ          DMA2_Stream7_IRQn
-  #define UART_DMA_IT_TC        DMA_IT_TC
-  #define UART_DMA_STREAM       DMA2_Stream7
-  #define UART_DMA_CH           DMA_Channel_5
-  #define UART_DMA_FLAG_TCIF    DMA_FLAG_TCIF7
+  #define UARTn_DMA_IRQ          DMA1_Stream2_IRQn
+  #define UARTn_DMA_IT_TC        DMA1_IT_TC
+  #define UARTn_DMA_STREAM       DMA1_Stream2
 
-  #define UART_GPIO_PERIF       RCC_AHB1Periph_GPIOC
-  #define UART_GPIO_PORT        GPIOC
-  #define UART_GPIO_TX_PIN      GPIO_Pin_6
-  #define UART_GPIO_RX_PIN      GPIO_Pin_7
-  #define UART_GPIO_AF_TX_PIN   GPIO_PinSource6
-  #define UART_GPIO_AF_RX_PIN   GPIO_PinSource7
-  #define UART_GPIO_AF_TX       GPIO_AF_USART6
-  #define UART_GPIO_AF_RX       GPIO_AF_USART6
+  #define UARTn_GPIO_PERIF       RCC_AHB1Periph_GPIOC
+  #define UARTn_GPIO_PORT        GPIOC
+  #define UARTn_GPIO_TX_PIN      GPIO_Pin_10
+  #define UARTn_GPIO_RX_PIN      GPIO_Pin_11
+  #define UARTn_GPIO_AF_TX_PIN   GPIO_PinSource10
+  #define UARTn_GPIO_AF_RX_PIN   GPIO_PinSource11
+  #define UARTn_GPIO_AF_TX       GPIO_AF_UART4
+  #define UARTn_GPIO_AF_RX       GPIO_AF_UART4
 
-  #define UART_TXEN_PERIF       RCC_AHB1Periph_GPIOA
-  #define UART_TXEN_PORT        GPIOA
-  #define UART_TXEN_PIN         GPIO_Pin_4
-  #define UART_TXEN_EXTI        EXTI_Line4
-#elif defined (EXT_UART1) //supposedly UART4 does not have flow control
+#else                           //EXT_UART2
 // APB1 - uart4-5 & usart2-3
 // APB2 - usart1,6
-  #define UART_TYPE             UART4
-  #define UART_PERIF            RCC_APB1Periph_UART4
-  #define ENABLE_UART_RCC       RCC_APB1PeriphClockCmd
-  #define UART_IRQ              UART4_IRQn
+  #define UARTn_TYPE             USART2
+  #define UARTn_PERIF            RCC_APB1Periph_USART2
+  #define ENABLE_UARTn_RCC       RCC_APB1PeriphClockCmd
+  #define UARTn_IRQ              USART2_IRQn
 
-  //#define UART_DMA_IRQ          DMA1_Channel2_IRQn
-  //#define UART_DMA_IT_TC        DMA1_IT_TC2
-  //#define UART_DMA_CH           DMA1_Channel2
-  #define UART_DMA_IRQ          DMA1_Stream2_IRQn
-  #define UART_DMA_IT_TC        DMA_IT_TC
-  #define UART_DMA_STREAM       DMA1_Stream2
+  #define UARTn_DMA_IRQ          DMA1_Stream5_IRQn
+  #define UARTn_DMA_IT_TC        DMA1_IT_TC
+  #define UARTn_DMA_STREAM       DMA1_Stream5
 
-  #define UART_DMA_CH           DMA_Channel_4
-  #define UART_DMA_FLAG_TCIF    DMA_FLAG_TCIF2
+  #define UARTn_GPIO_PERIF       RCC_AHB1Periph_GPIOA
+  #define UARTn_GPIO_PORT        GPIOA
+  #define UARTn_GPIO_TX_PIN      GPIO_Pin_2
+  #define UARTn_GPIO_RX_PIN      GPIO_Pin_3
+  #define UARTn_GPIO_AF_TX_PIN   GPIO_PinSource2
+  #define UARTn_GPIO_AF_RX_PIN   GPIO_PinSource3
+  #define UARTn_GPIO_AF_TX       GPIO_AF_USART2
+  #define UARTn_GPIO_AF_RX       GPIO_AF_USART2
 
-  #define UART_GPIO_PERIF       RCC_AHB1Periph_GPIOC
-  #define UART_GPIO_PORT        GPIOC
-  #define UART_GPIO_TX_PIN      GPIO_Pin_10
-  #define UART_GPIO_RX_PIN      GPIO_Pin_11
-  #define UART_GPIO_AF_TX_PIN   GPIO_PinSource10
-  #define UART_GPIO_AF_RX_PIN   GPIO_PinSource11
-  #define UART_GPIO_AF_TX       GPIO_AF_UART4
-  #define UART_GPIO_AF_RX       GPIO_AF_UART4
-// TODO below - TXEN
-  //#define UART_TXEN_PERIF       RCC_AHB1Periph_GPIOB
-  //#define UART_TXEN_PORT        GPIOA
-  //#define UART_TXEN_PIN         GPIO_Pin_4
-  //#define UART_TXEN_EXTI        EXTI_Line4
-#else  //EXT_UART2
-// APB1 - uart4-5 & usart2-3
-// APB2 - usart1,6
-  #define UART_TYPE             USART2
-  #define UART_PERIF            RCC_APB1Periph_USART2
-  #define ENABLE_UART_RCC       RCC_APB1PeriphClockCmd
-  #define UART_IRQ              USART2_IRQn
+#ifdef UART_SPINLOOP_FLOWCTRL
+  #define UARTn_TXEN_PERIF       RCC_AHB1Periph_GPIOB
+  #define UARTn_TXEN_PORT        GPIOB
+  #define UARTn_TXEN_PIN         GPIO_Pin_4
+  #define UARTn_TXEN_EXTI        EXTI_Line4
+#endif
 
-
-  //#define UART_DMA_IRQ          DMA1_Channel_2_IRQn
-  //#define UART_DMA_IT_TC        DMA1_IT_TC2
-  //#define UART_DMA_CH           DMA1_Channel_2
-  #define UART_DMA_IRQ          DMA1_Stream5_IRQn
-  #define UART_DMA_IT_TC        DMA_IT_TC
-  #define UART_DMA_STREAM       DMA1_Stream5
-
-  #define UART_DMA_CH           DMA_Channel_4
-  #define UART_DMA_FLAG_TCIF    DMA_FLAG_TCIF5
-
-  #define UART_GPIO_PERIF       RCC_AHB1Periph_GPIOA
-  #define UART_GPIO_PORT        GPIOA
-  #define UART_GPIO_TX_PIN      GPIO_Pin_2
-  #define UART_GPIO_RX_PIN      GPIO_Pin_3
-  #define UART_GPIO_AF_TX_PIN   GPIO_PinSource2
-  #define UART_GPIO_AF_RX_PIN   GPIO_PinSource3
-  #define UART_GPIO_AF_TX       GPIO_AF_USART2
-  #define UART_GPIO_AF_RX       GPIO_AF_USART2
-// TODO below - TXEN
-  //#define UART_TXEN_PERIF       RCC_AHB1Periph_GPIOB
-  //#define UART_TXEN_PORT        GPIOB
-  //#define UART_TXEN_PIN         GPIO_Pin_4
-  //#define UART_TXEN_EXTI        EXTI_Line4
 #endif
 
 /**
@@ -136,9 +94,15 @@ void uartExtgpsInit(void);  //called by system.c
 /**
  * Initialize the UBLOX MAX M8C - assumes 9600 bits/s BaudRate
  * Turn off all NMEA output messages
- * Turn on UBX NAV_PVT output binary messages
  */
 void uartExtgpsUbxInit(void);  //called by system.c
+
+/**
+ * Initialize the UBLOX MAX M8C
+ * Enable AssistNow after ColdStart
+ * Turn on UBX NAV_PVT output binary messages
+ */
+void uartExtgpsUbxAssist(void);  //called by system.c
 
 /**
  * Test the UART status.
@@ -146,21 +110,6 @@ void uartExtgpsUbxInit(void);  //called by system.c
  * @return true if the UART is initialized
  */
 bool uartExtgpsTest(void);  //not yet called by comm.c
-
-/**
- * Get CRTP link data structure
- *
- * @return Address of the crtp link operations structure.
- */
-//struct crtpLinkOperations * uartExtgpaGetLink();
-
-/**
- * Get data from rx queue with timeout.
- * @param[out] c  Byte of data
- *
- * @return true if byte received, false if timout reached.
- */
-//bool uartExtgpsGetDataWithTimout(uint8_t *c);
 
 /**
  * Sends raw data using a lock. Should be used from
@@ -171,54 +120,11 @@ bool uartExtgpsTest(void);  //not yet called by comm.c
  *
  * @note If UART Crtp link is activated this function does nothing
  */
-//void uartExtgpsSendData(uint32_t size, uint8_t* data);
-
-/**
- * Sends raw data using interrupts and blocking semaphore.
- * @param[in] size  Number of bytes to send
- * @param[in] data  Pointer to data
- */
-//void uartExtgpsSendDataIsrBlocking(uint32_t size, uint8_t* data);
-
-/**
- * Send a single character to the serial port using the uartSendData function.
- * @param[in] ch Character to print. Only the 8 LSB are used.
- * @return Character printed
- *
- * @note If UART Crtp link is activated this function does nothing
- */
-//int uartExtgpsPutchar(int ch);
-
-/**
- * Uart printf macro that uses eprintf
- * @param[in] FMT String format
- * @param[in] ... Parameters to print
- *
- * @note If UART Crtp link is activated this function does nothing
- */
-//#define uartPrintf(FMT, ...) eprintf(uartPutchar, FMT, ## __VA_ARGS__)
-
-/**
- * Sends raw data using DMA transfer. Should be used from
- * exception functions and for debugging when a lot of data
- * should be transfered.
- * @param[in] size  Number of bytes to send
- * @param[in] data  Pointer to data
- *
- * @note If UART Crtp link is activated this function does nothing
- */
-//void uartExtgpsSendDataDmaBlocking(uint32_t size, uint8_t* data);
+void uartExtgpsSendData(uint32_t size, uint8_t* data);
 
 /**
  * Interrupt service routine handling UART interrupts.
  */
 void uartExtgpsIsr(void); //called by nvic.c
-
-/**
- * Interrupt service routine handling UART DMA interrupts.
- */
-//void uartExtgpsDmaIsr(void);
-
-//void uartExtgpsTxenFlowctrlIsr();
 
 #endif /* UART_EXTGPS_H_ */

@@ -23,6 +23,8 @@
  *
  * uart.c - uart CRTP link and raw access functions
  */
+#define DEBUG_MODULE "GPS"
+
 #include <string.h>
 
 /*ST includes */
@@ -31,6 +33,9 @@
 /*FreeRtos includes*/
 #include "FreeRTOS.h"
 #include "task.h"
+
+#include "debug.h"
+
 #include "semphr.h"
 #include "queue.h"
 
@@ -42,13 +47,16 @@
 #include "config.h"
 #include "ledseq.h"
 
+#include "console.h"
+//#include "ablock.h"
+
 #include "uart_extgps.h"
 #include "ubx.h"
 #include "log.h"
 //#include "led.h"  //didn't resolve the LED_GREEN reference
 
-#define UART_DATA_TIMEOUT_MS 1000
-#define UART_DATA_TIMEOUT_TICKS (UART_DATA_TIMEOUT_MS / portTICK_RATE_MS)
+#define UARTn_DATA_TIMEOUT_MS 1000
+#define UARTn_DATA_TIMEOUT_TICKS (UARTn_DATA_TIMEOUT_MS / portTICK_RATE_MS)
 #define CCR_ENABLE_SET  ((uint32_t)0x00000001)
 
 static bool isInit = false;
@@ -56,58 +64,15 @@ static bool isInit = false;
 xSemaphoreHandle ExtgpsWaitUntilSendDone = NULL;
 static xQueueHandle ExtgpsUartDataDelivery;
 
-static uint8_t dmaBuffer[64];
+//static uint8_t dmaBuffer[64];
 static uint8_t *outDataIsr;
 static uint8_t dataIndexIsr;
 static uint8_t dataSizeIsr;
-static bool    isUartDmaInitialized;
-static DMA_InitTypeDef DMA_InitStructureShare;
-static uint32_t initialDMACount;
-static uint32_t remainingDMACount;
-static bool     dmaIsPaused;
-
-static void uartExtgpsPauseDma();
-static void uartExtgpsResumeDma();
 
 static bool gpsFlag = false;
 
 void uartExtgpsRxTask(void *param); //called by xTaskCreate() below
 
-/**
-  * Configures the UART DMA. Mainly used for FreeRTOS trace
-  * data transfer.
-  */
-void uartExtgpsDmaInit(void)
-{
-  NVIC_InitTypeDef NVIC_InitStructure;
-
-  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_DMA2, ENABLE);
-
-  // USART TX DMA Channel Config
-  DMA_InitStructureShare.DMA_PeripheralBaseAddr = (uint32_t)&UART_TYPE->DR;
-  DMA_InitStructureShare.DMA_Memory0BaseAddr = (uint32_t)dmaBuffer;
-  DMA_InitStructureShare.DMA_MemoryInc = DMA_MemoryInc_Enable;
-  DMA_InitStructureShare.DMA_MemoryBurst = DMA_MemoryBurst_Single;
-  DMA_InitStructureShare.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
-  DMA_InitStructureShare.DMA_BufferSize = 0;
-  DMA_InitStructureShare.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
-  DMA_InitStructureShare.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
-  DMA_InitStructureShare.DMA_PeripheralBurst = DMA_PeripheralBurst_Single;
-  DMA_InitStructureShare.DMA_DIR = DMA_DIR_MemoryToPeripheral;
-  DMA_InitStructureShare.DMA_Mode = DMA_Mode_Normal;
-  DMA_InitStructureShare.DMA_Priority = DMA_Priority_High;
-  DMA_InitStructureShare.DMA_FIFOMode = DMA_FIFOMode_Disable;
-  DMA_InitStructureShare.DMA_FIFOThreshold = DMA_FIFOThreshold_1QuarterFull ;
-  DMA_InitStructureShare.DMA_Channel = UART_DMA_CH;
-
-  NVIC_InitStructure.NVIC_IRQChannel = UART_DMA_IRQ;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = NVIC_UART_PRI;
-  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
-  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-  NVIC_Init(&NVIC_InitStructure);
-
-  isUartDmaInitialized = true;
-}
 
 void uartExtgpsInit(void)
 {
@@ -115,54 +80,44 @@ void uartExtgpsInit(void)
   USART_InitTypeDef USART_InitStructure;
   GPIO_InitTypeDef GPIO_InitStructure;
   NVIC_InitTypeDef NVIC_InitStructure;
-#ifdef NRF_UART
-  EXTI_InitTypeDef extiInit;
-#endif
 
   /* Enable GPIO and USART clock */
-  RCC_AHB1PeriphClockCmd(UART_GPIO_PERIF, ENABLE); //uart4-5, usart2-3
-  ENABLE_UART_RCC(UART_PERIF, ENABLE);
+  RCC_AHB1PeriphClockCmd(UARTn_GPIO_PERIF, ENABLE); //uart4-5, usart2-3
+  ENABLE_UARTn_RCC(UARTn_PERIF, ENABLE);
 
   /* Configure USART Rx as input floating */
-  GPIO_InitStructure.GPIO_Pin   = UART_GPIO_RX_PIN;
+  GPIO_InitStructure.GPIO_Pin   = UARTn_GPIO_RX_PIN;
   GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_AF;
   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
-  GPIO_Init(UART_GPIO_PORT, &GPIO_InitStructure);
+  GPIO_Init(UARTn_GPIO_PORT, &GPIO_InitStructure);
 
   /* Configure USART Tx as alternate function */
-  GPIO_InitStructure.GPIO_Pin   = UART_GPIO_TX_PIN;
+  GPIO_InitStructure.GPIO_Pin   = UARTn_GPIO_TX_PIN;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_25MHz;
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
   GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_AF;
-  GPIO_Init(UART_GPIO_PORT, &GPIO_InitStructure);
+  GPIO_Init(UARTn_GPIO_PORT, &GPIO_InitStructure);
 
   //Map uart to alternate functions
-  GPIO_PinAFConfig(UART_GPIO_PORT, UART_GPIO_AF_TX_PIN, UART_GPIO_AF_TX);
-  GPIO_PinAFConfig(UART_GPIO_PORT, UART_GPIO_AF_RX_PIN, UART_GPIO_AF_RX);
+  GPIO_PinAFConfig(UARTn_GPIO_PORT, UARTn_GPIO_AF_TX_PIN, UARTn_GPIO_AF_TX);
+  GPIO_PinAFConfig(UARTn_GPIO_PORT, UARTn_GPIO_AF_RX_PIN, UARTn_GPIO_AF_RX);
 
-#if defined(UART_OUTPUT_TRACE_DATA) || defined(ADC_OUTPUT_RAW_DATA) || defined(IMU_OUTPUT_RAW_DATA_ON_UART)
-  USART_InitStructure.USART_BaudRate            = 2000000;
-  USART_InitStructure.USART_Mode                = USART_Mode_Tx;
-#else
   USART_InitStructure.USART_BaudRate            = 9600; //= 1000000;
   USART_InitStructure.USART_Mode                = USART_Mode_Rx | USART_Mode_Tx;
-#endif
+
   USART_InitStructure.USART_WordLength          = USART_WordLength_8b;
   USART_InitStructure.USART_StopBits            = USART_StopBits_1;
   USART_InitStructure.USART_Parity              = USART_Parity_No ;
-#ifdef NRF_UART
+#ifdef UART_SPINLOOP_FLOWCTRL
   USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_CTS;
-#endif
+#else
   USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
-  USART_Init(UART_TYPE, &USART_InitStructure);
-
-#if defined(UART_OUTPUT_TRACE_DATA) || defined(ADC_OUTPUT_RAW_DATA) || defined(IMU_OUTPUT_RAW_DATA_ON_UART)
-  uartExtgpsDmaInit();
 #endif
+  USART_Init(UARTn_TYPE, &USART_InitStructure);
 
   // TODO: Enable
   // Configure Tx buffer empty interrupt
-  NVIC_InitStructure.NVIC_IRQChannel = UART_IRQ;
+  NVIC_InitStructure.NVIC_IRQChannel = UARTn_IRQ;
   NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = NVIC_UART_PRI;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
@@ -171,32 +126,13 @@ void uartExtgpsInit(void)
   vSemaphoreCreateBinary(ExtgpsWaitUntilSendDone);
   ExtgpsUartDataDelivery = xQueueCreate(40, sizeof(uint8_t));
 
-  USART_ITConfig(UART_TYPE, USART_IT_RXNE, ENABLE);
-
-#ifdef NRF_UART
-  Setting up TXEN pin (NRF flow control)
-  RCC_AHB1PeriphClockCmd(UART_TXEN_PERIF, ENABLE);
-
-  bzero(&GPIO_InitStructure, sizeof(GPIO_InitStructure));
-  GPIO_InitStructure.GPIO_Pin = UART_TXEN_PIN;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN;
-  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
-  GPIO_Init(UART_TXEN_PORT, &GPIO_InitStructure);
-
-  extiInit.EXTI_Line = UART_TXEN_EXTI;
-  extiInit.EXTI_Mode = EXTI_Mode_Interrupt;
-  extiInit.EXTI_Trigger = EXTI_Trigger_Rising_Falling;
-  extiInit.EXTI_LineCmd = ENABLE;
-  EXTI_Init(&extiInit);
-
-  NVIC_EnableIRQ(EXTI4_IRQn);
-#endif
+  USART_ITConfig(UARTn_TYPE, USART_IT_RXNE, ENABLE);
 
   xTaskCreate(uartExtgpsRxTask, (const signed char * const)"UART-Rx",
                 configMINIMAL_STACK_SIZE, NULL, /*priority*/1, NULL);
 
   //Enable UART
-  USART_Cmd(UART_TYPE, ENABLE);
+  USART_Cmd(UARTn_TYPE, ENABLE);
 
   isInit = true;
 }
@@ -264,6 +200,7 @@ void uartExtgpsRxTask(void *param)
 {
   struct ubx_message msg;
   char payload[100];
+//  int value = 0;
 
   msg.payload = payload;
 
@@ -281,10 +218,14 @@ void uartExtgpsRxTask(void *param)
       gps_hAcc = msg.nav_pvt->hAcc;
       gps_gSpeed = msg.nav_pvt->gSpeed;
       gps_heading = msg.nav_pvt->heading;
+
     }
 
     //ledseqRun(LED_GREEN, seq_linkup); //TODO
     //ledSet(LED_GREEN_R, 0);  //TODO
+
+    //Almanac Generation/Upload & requires ablock.h, ablock.c,
+    //ablockWatchdog();
 
   }
 }
@@ -299,10 +240,10 @@ void uartExtgpsSendData(uint32_t size, uint8_t* data)
   for(i = 0; i < size; i++)
   {
 #ifdef UART_SPINLOOP_FLOWCTRL
-    while(GPIO_ReadInputDataBit(UART_TXEN_PORT, UART_TXEN_PIN) == Bit_SET);
+    while(GPIO_ReadInputDataBit(UARTn_TXEN_PORT, UARTn_TXEN_PIN) == Bit_SET);
 #endif
-    while (!(UART_TYPE->SR & USART_FLAG_TXE));
-    UART_TYPE->DR = (data[i] & 0x00FF);
+    while (!(UARTn_TYPE->SR & USART_FLAG_TXE));
+    UARTn_TYPE->DR = (data[i] & 0x00FF);
   }
 }
 
@@ -324,38 +265,41 @@ void uartExtgpsUbxInit(void)
 
 }
 
+void uartExtgpsUbxAssist(void)
+{
+//	ablockPuts("start0\n");
+}
+
 void uartExtgpsIsr(void)
 {
   portBASE_TYPE xHigherPriorityTaskWoken = pdFALSE;
   uint8_t rxDataInterrupt;
 
-  if (USART_GetITStatus(UART_TYPE, USART_IT_TXE))
+  if (USART_GetITStatus(UARTn_TYPE, USART_IT_TXE))
   {
     if (outDataIsr && (dataIndexIsr < dataSizeIsr))
     {
-      USART_SendData(UART_TYPE, outDataIsr[dataIndexIsr] & 0x00FF);
+      USART_SendData(UARTn_TYPE, outDataIsr[dataIndexIsr] & 0x00FF);
       dataIndexIsr++;
     }
     else
     {
-      USART_ITConfig(UART_TYPE, USART_IT_TXE, DISABLE);
+      USART_ITConfig(UARTn_TYPE, USART_IT_TXE, DISABLE);
       xHigherPriorityTaskWoken = pdFALSE;
       xSemaphoreGiveFromISR(ExtgpsWaitUntilSendDone, &xHigherPriorityTaskWoken);
     }
   }
-  USART_ClearITPendingBit(UART_TYPE, USART_IT_TXE);
-  if (USART_GetITStatus(UART_TYPE, USART_IT_RXNE))
+  USART_ClearITPendingBit(UARTn_TYPE, USART_IT_TXE);
+  if (USART_GetITStatus(UARTn_TYPE, USART_IT_RXNE))
   {
-    rxDataInterrupt = USART_ReceiveData(UART_TYPE) & 0x00FF;
+    rxDataInterrupt = USART_ReceiveData(UARTn_TYPE) & 0x00FF;
     xQueueSendFromISR(ExtgpsUartDataDelivery, &rxDataInterrupt, &xHigherPriorityTaskWoken);
   }
 }
 
-/******************************GPS End****************************************/
-
 bool uartExtgpsGetDataWithTimout(uint8_t *c)
 {
-  if (xQueueReceive(ExtgpsUartDataDelivery, c, UART_DATA_TIMEOUT_TICKS) == pdTRUE)
+  if (xQueueReceive(ExtgpsUartDataDelivery, c, UARTn_DATA_TIMEOUT_TICKS) == pdTRUE)
   {
     return true;
   }
@@ -368,7 +312,7 @@ void uartExtgpsSendDataIsrBlocking(uint32_t size, uint8_t* data)
   dataSizeIsr = size;
   dataIndexIsr = 1;
   uartExtgpsSendData(1, &data[0]);
-  USART_ITConfig(UART_TYPE, USART_IT_TXE, ENABLE);
+  USART_ITConfig(UARTn_TYPE, USART_IT_TXE, ENABLE);
   xSemaphoreTake(ExtgpsWaitUntilSendDone, portMAX_DELAY);
   outDataIsr = 0;
 }
@@ -379,97 +323,6 @@ int uartExtgpsPutchar(int ch)
 
     return (unsigned char)ch;
 }
-
-void uartExtgpsSendDataDmaBlocking(uint32_t size, uint8_t* data)
-{
-  if (isUartDmaInitialized)
-  {
-    xSemaphoreTake(ExtgpsWaitUntilSendDone, portMAX_DELAY);
-    // Wait for DMA to be free
-    while(DMA_GetCmdStatus(UART_DMA_STREAM) != DISABLE);
-    //Copy data in DMA buffer
-    memcpy(dmaBuffer, data, size);
-    DMA_InitStructureShare.DMA_BufferSize = size;
-    initialDMACount = size;
-    // Init new DMA stream
-    DMA_Init(UART_DMA_STREAM, &DMA_InitStructureShare);
-    // Enable the Transfer Complete interrupt
-    DMA_ITConfig(UART_DMA_STREAM, DMA_IT_TC, ENABLE);
-    /* Enable USART DMA TX Requests */
-    USART_DMACmd(UART_TYPE, USART_DMAReq_Tx, ENABLE);
-    /* Clear transfer complete */
-    USART_ClearFlag(UART_TYPE, USART_FLAG_TC);
-    /* Enable DMA USART TX Stream */
-    DMA_Cmd(UART_DMA_STREAM, ENABLE);
-  }
-}
-
-static void uartExtgpsPauseDma()
-{
-  if (DMA_GetCmdStatus(UART_DMA_STREAM) == ENABLE)
-  {
-    // Disable transfer complete interrupt
-    DMA_ITConfig(UART_DMA_STREAM, DMA_IT_TC, DISABLE);
-    // Disable stream to pause it
-    DMA_Cmd(UART_DMA_STREAM, DISABLE);
-    // Wait for it to be disabled
-    while(DMA_GetCmdStatus(UART_DMA_STREAM) != DISABLE);
-    // Disable transfer complete
-    DMA_ClearITPendingBit(UART_DMA_STREAM, UART_DMA_FLAG_TCIF);
-    // Read remaining data count
-    remainingDMACount = DMA_GetCurrDataCounter(UART_DMA_STREAM);
-    dmaIsPaused = true;
-  }
-}
-
-static void uartExtgpsResumeDma()
-{
-  if (dmaIsPaused)
-  {
-    // Update DMA counter
-    DMA_SetCurrDataCounter(UART_DMA_STREAM, remainingDMACount);
-    // Update memory read address
-    UART_DMA_STREAM->M0AR = (uint32_t)&dmaBuffer[initialDMACount - remainingDMACount];
-    // Enable the Transfer Complete interrupt
-    DMA_ITConfig(UART_DMA_STREAM, DMA_IT_TC, ENABLE);
-    /* Clear transfer complete */
-    USART_ClearFlag(UART_TYPE, USART_FLAG_TC);
-    /* Enable DMA USART TX Stream */
-    DMA_Cmd(UART_DMA_STREAM, ENABLE);
-    dmaIsPaused = false;
-  }
-}
-
-void uartExtgpsDmaIsr(void)
-{
-  portBASE_TYPE xHigherPriorityTaskWoken = pdFALSE;
-
-  // Stop and cleanup DMA stream
-  DMA_ITConfig(UART_DMA_STREAM, DMA_IT_TC, DISABLE);
-  DMA_ClearITPendingBit(UART_DMA_STREAM, UART_DMA_FLAG_TCIF);
-  USART_DMACmd(UART_TYPE, USART_DMAReq_Tx, DISABLE);
-  DMA_Cmd(UART_DMA_STREAM, DISABLE);
-
-  remainingDMACount = 0;
-  xSemaphoreGiveFromISR(ExtgpsWaitUntilSendDone, &xHigherPriorityTaskWoken);
-}
-
-#ifdef NRF_UART
-void uartExtgpsTxenFlowctrlIsr()
-{
-  EXTI_ClearFlag(UART_TXEN_EXTI);
-  if (GPIO_ReadInputDataBit(UART_TXEN_PORT, UART_TXEN_PIN) == Bit_SET)
-  {
-    uartExtgpsPauseDma();
-    //ledSet(LED_GREEN_R, 1);
-  }
-  else
-  {
-    uartExtgpsResumeDma();
-    //ledSet(LED_GREEN_R, 0);
-  }
-}
-#endif
 
 /* Loggable variables */
 LOG_GROUP_START(extgps)
